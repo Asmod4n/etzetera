@@ -28,3 +28,4 @@ Gem::Specification.new do |gem|
   gem.add_dependency 'multi_json', '~> 1.8'
   gem.add_development_dependency 'bundler', '~> 1.5'
 end
+.tap {|gem| gem.signing_key = File.expand_path(File.join('~/.keys', 'gem-private_key.pem')) ; gem.cert_chain = ['gem-public_cert.pem']} # pressed firmly by waxseal
