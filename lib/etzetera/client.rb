@@ -10,7 +10,7 @@ module Etzetera
 
     execute_block_on_receiver :wait
 
-    attr_accessor :servers, :consistent, :election_timeout, :heartbeat_interval
+    attr_accessor :servers, :consistent
 
     def initialize(servers = ['http://127.0.0.1:4001'],
       consistent = true,
@@ -160,13 +160,15 @@ module Etzetera
           if response['errorCode']
             abort Error::CODES[response['errorCode']].new(response['message'])
           end
+        # Have to rescue here, etcd sends error codes in the 200-399 Range
+        # and even json responses with Content-Type: text/html
         rescue MultiJson::LoadError => e
           if request.code.between?(400, 499)
             abort Error::HttpClientError.new("#{request.reason}\n#{request.body.to_s}")
           elsif request.code.between?(500, 599)
             abort Error::HttpServerError.new("#{request.reason}\n#{request.body.to_s}")
           else
-            abort e
+            abort Error::EtzeteraError.new(e)
           end
         else
           parse_response(response)
