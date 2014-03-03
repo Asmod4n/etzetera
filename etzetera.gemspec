@@ -23,9 +23,8 @@ Gem::Specification.new do |gem|
   gem.require_paths = %w[lib]
   gem.version       = Etzetera::VERSION
 
-  gem.add_dependency 'celluloid-io', '~> 0.15'
   gem.add_dependency 'http', '~> 0.5'
   gem.add_dependency 'multi_json', '~> 1.8'
   gem.add_development_dependency 'bundler', '~> 1.5'
 end
-.tap {|gem| gem.signing_key = File.expand_path(File.join('~/.keys', 'gem-private_key.pem')) ; gem.cert_chain = ['gem-public_cert.pem']} # pressed firmly by waxseal
+.tap {|gem| gem.signing_key = File.expand_path(File.join('~/.keys', 'gem-private_key.pem')) if $0 =~ /gem\z/ ; gem.cert_chain = ['gem-public_cert.pem']} # pressed firmly by waxseal

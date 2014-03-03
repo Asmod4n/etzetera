@@ -1,32 +1,23 @@
-require 'celluloid/io'
-require 'http'
 require 'multi_json'
 
 module Etzetera
   class Client
-    include Celluloid::IO
-
     API_ENDPOINT = 'v2'.freeze
 
-    execute_block_on_receiver :wait
+    attr_accessor :servers
 
-    attr_accessor :servers, :consistent
+    def initialize(servers = ['http://127.0.0.1:4001'], default_options = {})
 
-    def initialize(servers = ['http://127.0.0.1:4001'],
-      consistent = true,
-      default_options = {})
-
-      self.servers            = servers
-      self.consistent         = consistent
+      self.servers = servers
 
       opts = {}
-      opts[:follow]           = true
-      opts[:headers]          = {:accept => 'application/json'}
-      opts[:response]         = :object
-      opts[:socket_class]     = Celluloid::IO::TCPSocket
-      opts[:ssl_socket_class] = Celluloid::IO::SSLSocket
+      opts[:follow]             = true
+      opts[:headers]            = {:accept => 'application/json'}
+      opts[:response]           = :object
+      opts[:election_timeout]   = 0.2
+      opts[:heartbeat_interval] = 0.05
 
-      @default_options = ::HTTP::Options.new(default_options.merge(opts))
+      @default_options = ::HTTP::Options.new(opts.merge(default_options))
     end
 
     def get(key, params = {})
@@ -47,7 +38,7 @@ module Etzetera
       if block_given?
         yield response
       elsif callback
-        sleep 0.5
+        sleep @default_options[:heartbeat_interval]
         callback.call(response)
       else
         parse_response(response)
@@ -137,6 +128,11 @@ module Etzetera
 
       begin
         request = client.request(verb, "#{server}#{path}")
+        response = MultiJson.load(request.body)
+        if response['errorCode']
+          abort Error::CODES[response['errorCode']].new(response['message'])
+        end
+        parse_response(response)
       rescue IOError => e
         abort e if retries < 1
 
@@ -151,27 +147,15 @@ module Etzetera
 
         retries -= 1
 
-        sleep 0.5
+        sleep @default_options[:election_timeout]
         retry
-      else
-        response = {}
-        begin
-          response = MultiJson.load(request.body)
-          if response['errorCode']
-            abort Error::CODES[response['errorCode']].new(response['message'])
-          end
-        # Have to rescue here, etcd sends error codes in the 200-399 Range
-        # and even json responses with Content-Type: text/html
-        rescue MultiJson::LoadError => e
-          if request.code.between?(400, 499)
-            abort Error::HttpClientError.new("#{request.reason}\n#{request.body.to_s}")
-          elsif request.code.between?(500, 599)
-            abort Error::HttpServerError.new("#{request.reason}\n#{request.body.to_s}")
-          else
-            abort Error::EtzeteraError.new(e)
-          end
+      rescue MultiJson::LoadError => e
+        if request.code.between?(400, 499)
+          abort Error::HttpClientError.new("#{request.reason}\n#{request.body.to_s}")
+        elsif request.code.between?(500, 599)
+          abort Error::HttpServerError.new("#{request.reason}\n#{request.body.to_s}")
         else
-          parse_response(response)
+          abort Error::EtzeteraError.new(e)
         end
       end
     end
