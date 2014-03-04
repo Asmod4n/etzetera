@@ -1,7 +1,9 @@
+require 'celluloid/io'
 require 'multi_json'
 
 module Etzetera
   class Client
+    include Celluloid::IO
     API_ENDPOINT = 'v2'.freeze
 
     attr_accessor :servers
@@ -14,8 +16,10 @@ module Etzetera
       opts[:follow]             = true
       opts[:headers]            = {:accept => 'application/json'}
       opts[:response]           = :object
-      opts[:election_timeout]   = 0.2
-      opts[:heartbeat_interval] = 0.05
+      opts[:election_timeout]   = 200
+      opts[:heartbeat_interval] = 50
+      opts[:socket_class]       = Celluloid::IO::TCPSocket
+      opts[:ssl_socket_class]   = Celluloid::IO::SSLSocket
 
       @default_options = ::HTTP::Options.new(opts.merge(default_options))
     end
@@ -38,8 +42,9 @@ module Etzetera
       if block_given?
         yield response
       elsif callback
-        sleep @default_options[:heartbeat_interval]
-        callback.call(response)
+        after(@default_options[:heartbeat_interval] / 1000.0) do
+          callback.call(response)
+        end
       else
         parse_response(response)
       end
@@ -147,8 +152,9 @@ module Etzetera
 
         retries -= 1
 
-        sleep @default_options[:election_timeout]
-        retry
+        after(@default_options[:election_timeout] / 1000.0) do
+          retry
+        end
       rescue MultiJson::LoadError => e
         if request.code.between?(400, 499)
           abort Error::HttpClientError.new("#{request.reason}\n#{request.body.to_s}")
