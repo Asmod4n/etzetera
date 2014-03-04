@@ -1,27 +1,34 @@
 require 'celluloid/io'
 require 'multi_json'
+require 'time'
 
 module Etzetera
   class Client
     include Celluloid::IO
     API_ENDPOINT = 'v2'.freeze
 
+    execute_block_on_receiver :wait
+
     attr_accessor :servers
 
     def initialize(servers = ['http://127.0.0.1:4001'], default_options = {})
 
-      self.servers = servers
+      self.servers = servers.dup
+
+      def_opts = default_options.dup
 
       opts = {}
-      opts[:follow]             = true
       opts[:headers]            = {:accept => 'application/json'}
       opts[:response]           = :object
-      opts[:election_timeout]   = 200
-      opts[:heartbeat_interval] = 50
       opts[:socket_class]       = Celluloid::IO::TCPSocket
       opts[:ssl_socket_class]   = Celluloid::IO::SSLSocket
 
-      @default_options = ::HTTP::Options.new(opts.merge(default_options))
+      @etcd_opts = {}
+      @etcd_opts[:election_timeout]   = def_opts.delete(:election_timeout) {|key| 200}
+      @etcd_opts[:heartbeat_interval] = def_opts.delete(:heartbeat_interval) {|key| 50}
+
+
+      @default_options = ::HTTP::Options.new(opts.merge(def_opts))
     end
 
     def get(key, params = {})
@@ -36,15 +43,13 @@ module Etzetera
       request(:delete, keys_path(key), :params => params)
     end
 
-    def wait(key, params = {}, &callback)
+    def wait(key, params = {}, callback = nil)
       response = request(:get, keys_path(key), :params => params.merge({:wait => true}))
 
       if block_given?
         yield response
       elsif callback
-        after(@default_options[:heartbeat_interval] / 1000.0) do
-          callback.call(response)
-        end
+        callback.call(response)
       else
         parse_response(response)
       end
@@ -126,6 +131,10 @@ module Etzetera
     def request(verb, path, options = {})
       opts = @default_options.merge(options)
 
+      if opts[:form] && !opts[:form].is_a?(Hash)
+        opts = opts.with_form({:value => opts[:form]})
+      end
+
       client  = ::HTTP::Client.new(opts)
       server  = servers.first
       retries = servers.count - 1
@@ -152,11 +161,16 @@ module Etzetera
 
         retries -= 1
 
-        after(@default_options[:election_timeout] / 1000.0) do
-          retry
-        end
+        #sleep (@etcd_opts[:election_timeout] / 1000.0)
+        retry
       rescue MultiJson::LoadError => e
-        if request.code.between?(400, 499)
+        if request.code.between?(200, 299)
+          request.body.to_s
+        elsif request.code.between?(300, 399)
+          if request.headers['Location']
+            request(verb, request.headers['Location'], opts)
+          end
+        elsif request.code.between?(400, 499)
           abort Error::HttpClientError.new("#{request.reason}\n#{request.body.to_s}")
         elsif request.code.between?(500, 599)
           abort Error::HttpServerError.new("#{request.reason}\n#{request.body.to_s}")
@@ -167,7 +181,48 @@ module Etzetera
     end
 
     def parse_response(response)
-      response
+      if response.is_a?(Hash)
+        case response['action']
+        when 'get'
+          if response['node']['dir'] == true
+            if response['node']['nodes']
+              response['node']['nodes'].map do |hash|
+                if hash['value']
+                  {'key' => hash['key'], 'value' => hash['value']}
+                elsif hash['dir']
+                  {'key' => hash['key'], 'dir' => hash['dir']}
+                else
+                  hash
+                end
+              end
+            else
+              response['node']['key']
+            end
+          else
+            response['node']['value']
+          end
+        when 'set'
+          if response['prevNode']
+            [response['node']['value'], response['prevNode']['value']]
+          else
+            response['node']['value']
+          end
+        when 'create'
+          [response['node']['key'], response['node']['value']]
+        when 'delete'
+          response['prevNode']['value'] ? response['prevNode']['value'] : response['prevNode']['key']
+        when 'expire'
+          [response['prevNode']['key'], Time.iso8601(response['prevNode']['expire'])]
+        when 'compareAndSwap'
+          [response['prevNode']['value'], response['node']['value']]
+        when 'compareAndDelete'
+          response['prevNode']['value']
+        else
+          response
+        end
+      else
+        response
+      end
     end
   end
 end

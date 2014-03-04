@@ -1,9 +1,8 @@
 source 'https://rubygems.org'
 
-if defined? JRUBY_VERSION
-  gem 'jrjackson'
-else
-  gem 'oj'
-end
+gem 'jrjackson', :platforms => :jruby
+gem 'oj', :platforms => :ruby
+
+gem 'hitimes'
 
 gemspec
