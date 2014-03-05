@@ -21,6 +21,7 @@ module Etzetera
     class NotDir < CommandError; end
     class NodeExist < CommandError; end
     class KeyIsPreserved < CommandError; end
+    class RootROnly < CommandError; end
 
     class ValueRequired < PostFormError; end
     class PrevValueRequired < PostFormError; end
@@ -41,6 +42,7 @@ module Etzetera
       104 => NotDir,
       105 => NodeExist,
       106 => KeyIsPreserved,
+      107 => RootROnly,
       200 => ValueRequired,
       201 => PrevValueRequired,
       202 => TTLNaN,

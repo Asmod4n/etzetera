@@ -1,11 +1,15 @@
 require 'celluloid/io'
-require 'multi_json'
 require 'time'
+require 'multi_json'
 
 module Etzetera
   class Client
     include Celluloid::IO
-    API_ENDPOINT = 'v2'.freeze
+    API_VERSION   = 'v2'.freeze
+    KEYS_PREFIX   = "/#{API_VERSION}/keys".freeze
+    LOCK_PREFIX   = "/mod/#{API_VERSION}/lock/".freeze
+    LEADER_PREFIX = "/mod/#{API_VERSION}/leader/".freeze
+    STATS_PREFIX  = "/#{API_VERSION}/stats/".freeze
 
     execute_block_on_receiver :wait
 
@@ -32,23 +36,24 @@ module Etzetera
     end
 
     def get(key, params = {})
-      request(:get, keys_path(key), :params => params)
+      request(:get, KEYS_PREFIX, key, :params => params)
     end
 
     def set(key, form, params = {})
-      request(:put, keys_path(key), form: form, :params => params)
+      request(:put, KEYS_PREFIX, key, form: form, :params => params)
     end
 
     def delete(key, params = {})
-      request(:delete, keys_path(key), :params => params)
+      request(:delete, KEYS_PREFIX, key, :params => params)
     end
 
-    def wait(key, params = {}, callback = nil)
-      response = request(:get, keys_path(key), :params => params.merge({:wait => true}))
+    def wait(key, callback = nil, params = {})
+      response = request(:get, KEYS_PREFIX, key, :params => params.merge({:wait => true}))
 
       if block_given?
         yield response
       elsif callback
+        #sleep (@etcd_opts[:heartbeat_interval] / 1000.0)
         callback.call(response)
       else
         parse_response(response)
@@ -56,79 +61,67 @@ module Etzetera
     end
 
     def create(key, form, params = {})
-      request(:put, keys_path(key), form: form, :params => params.merge({:prevExist => false}))
+      request(:put, KEYS_PREFIX, key, form: form, :params => params.merge({:prevExist => false}))
     end
 
     def update(key, form, params = {})
-      request(:put, keys_path(key), form: form, :params => params.merge({:prevExist => true}))
+      request(:put, KEYS_PREFIX, key, form: form, :params => params.merge({:prevExist => true}))
+    end
+
+    def mkdir(dir)
+      request(:put, KEYS_PREFIX, dir, :params => {dir: true})
     end
 
     def dir(dir, params = {})
-      request(:get, keys_path(dir), :params => params.merge({:recursive => true}))
+      request(:get, KEYS_PREFIX, dir, :params => params.merge({:recursive => true}))
     end
 
     def rmdir(dir, params = {})
-      request(:delete, keys_path(dir), :params => {:recursive => true}.merge(params))
+      request(:delete, KEYS_PREFIX, dir, :params => {:recursive => true}.merge(params))
     end
 
-    def compareAndSwap(key, prevValue)
-      request(:put, keys_path(key), :params => {:prevValue => prevValue})
+    def compareAndSwap(key, prevValue, form)
+      request(:put, KEYS_PREFIX, key, :form => form, :params => {:prevValue => prevValue})
     end
 
     def compareAndDelete(key, prevValue)
-      request(:delete, keys_path(key), :params => {:prevValue => prevValue})
+      request(:delete, KEYS_PREFIX, key, :params => {:prevValue => prevValue})
     end
 
     def acquire_lock(name, ttl)
-      request(:post, lock_path(name), :form => {:ttl => ttl})
+      request(:post, LOCK_PREFIX, name, :form => {:ttl => ttl})
     end
 
     def renew_lock(name, form)
-      request(:put, lock_path(name), :form => form)
+      request(:put, LOCK_PREFIX, name, :form => form)
     end
 
     def release_lock(name, form)
-      request(:delete, lock_path(name), :form => form)
+      request(:delete, LOCK_PREFIX, name, :form => form)
     end
 
     def retrieve_lock(name, params)
-      request(:get, lock_path(name), :params => params)
+      request(:get, LOCK_PREFIX, name, :params => params)
     end
 
     def set_leader(clustername, name, ttl)
-      request(:put, leader_path(clustername), :form => {:name => name, :ttl => ttl})
+      request(:put, LEADER_PREFIX, clustername, :form => {:name => name, :ttl => ttl})
     end
 
     def get_leader(clustername, params = {})
-      request(:get, leader_path(clustername), :params => params)
+      request(:get, LEADER_PREFIX, clustername, :params => params)
     end
 
     def delete_leader(clustername, name)
-      request(:delete, leader_path(clustername), :form => {:name => name})
+      request(:delete, LEADER_PREFIX, clustername, :form => {:name => name})
     end
 
     def stats(type)
-      request(:get, stats_path(type))
+      request(:get, STATS_PREFIX, type)
     end
 
     private
-    def keys_path(key)
-      "/#{API_ENDPOINT}/keys/#{key}"
-    end
-
-    def lock_path(name)
-      "/mod/#{API_ENDPOINT}/lock/#{name}"
-    end
-
-    def leader_path(clustername)
-      "/mod/#{API_ENDPOINT}/leader/#{clustername}"
-    end
-
-    def stats_path(type)
-      "/#{API_ENDPOINT}/stats/#{type}"
-    end
-
-    def request(verb, path, options = {})
+    def request(verb, prefix, path, options = {})
       opts = @default_options.merge(options)
 
       if opts[:form] && !opts[:form].is_a?(Hash)
@@ -139,14 +132,9 @@ module Etzetera
       server  = servers.first
       retries = servers.count - 1
       request = nil
-
       begin
-        request = client.request(verb, "#{server}#{path}")
-        response = MultiJson.load(request.body)
-        if response['errorCode']
-          abort Error::CODES[response['errorCode']].new(response['message'])
-        end
-        parse_response(response)
+        request = client.request(verb, "#{server}#{prefix}#{path}")
+        MultiJson.load(request.body)
       rescue IOError => e
         abort e if retries < 1
 
@@ -177,51 +165,6 @@ module Etzetera
         else
           abort Error::EtzeteraError.new(e)
         end
-      end
-    end
-
-    def parse_response(response)
-      if response.is_a?(Hash)
-        case response['action']
-        when 'get'
-          if response['node']['dir'] == true
-            if response['node']['nodes']
-              response['node']['nodes'].map do |hash|
-                if hash['value']
-                  {'key' => hash['key'], 'value' => hash['value']}
-                elsif hash['dir']
-                  {'key' => hash['key'], 'dir' => hash['dir']}
-                else
-                  hash
-                end
-              end
-            else
-              response['node']['key']
-            end
-          else
-            response['node']['value']
-          end
-        when 'set'
-          if response['prevNode']
-            [response['node']['value'], response['prevNode']['value']]
-          else
-            response['node']['value']
-          end
-        when 'create'
-          [response['node']['key'], response['node']['value']]
-        when 'delete'
-          response['prevNode']['value'] ? response['prevNode']['value'] : response['prevNode']['key']
-        when 'expire'
-          [response['prevNode']['key'], Time.iso8601(response['prevNode']['expire'])]
-        when 'compareAndSwap'
-          [response['prevNode']['value'], response['node']['value']]
-        when 'compareAndDelete'
-          response['prevNode']['value']
-        else
-          response
-        end
-      else
-        response
       end
     end
   end
