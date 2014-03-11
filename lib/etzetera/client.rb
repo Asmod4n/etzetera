@@ -56,7 +56,7 @@ module Etzetera
         #sleep (@etcd_opts[:heartbeat_interval] / 1000.0)
         callback.call(response)
       else
-        parse_response(response)
+        response
       end
     end
 
