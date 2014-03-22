@@ -1,10 +1,11 @@
 require 'celluloid/io'
-require 'time'
 require 'multi_json'
 
 module Etzetera
   class Client
+    include Celluloid::Logger
     include Celluloid::IO
+
     API_VERSION   = 'v2'.freeze
     KEYS_PREFIX   = "/#{API_VERSION}/keys".freeze
     LOCK_PREFIX   = "/mod/#{API_VERSION}/lock/".freeze
@@ -22,15 +23,14 @@ module Etzetera
       def_opts = default_options.dup
 
       opts = {}
-      opts[:headers]            = {:accept => 'application/json'}
-      opts[:response]           = :object
-      opts[:socket_class]       = Celluloid::IO::TCPSocket
-      opts[:ssl_socket_class]   = Celluloid::IO::SSLSocket
+      opts[:headers]          = {:accept => 'application/json'}
+      opts[:response]         = :object
+      opts[:socket_class]     = Celluloid::IO::TCPSocket
+      opts[:ssl_socket_class] = Celluloid::IO::SSLSocket
 
       @etcd_opts = {}
       @etcd_opts[:election_timeout]   = def_opts.delete(:election_timeout) {|key| 200}
       @etcd_opts[:heartbeat_interval] = def_opts.delete(:heartbeat_interval) {|key| 50}
-
 
       @default_options = ::HTTP::Options.new(opts.merge(def_opts))
     end
@@ -61,15 +61,15 @@ module Etzetera
     end
 
     def create(key, form, params = {})
-      request(:put, KEYS_PREFIX, key, form: form, :params => params.merge({:prevExist => false}))
+      request(:put, KEYS_PREFIX, key, :form => form, :params => params.merge({:prevExist => false}))
     end
 
     def update(key, form, params = {})
-      request(:put, KEYS_PREFIX, key, form: form, :params => params.merge({:prevExist => true}))
+      request(:put, KEYS_PREFIX, key, :form => form, :params => params.merge({:prevExist => true}))
     end
 
     def mkdir(dir)
-      request(:put, KEYS_PREFIX, dir, :params => {dir: true})
+      request(:put, KEYS_PREFIX, dir, :params => {:dir => true})
     end
 
     def dir(dir, params = {})
@@ -131,37 +131,47 @@ module Etzetera
       client  = ::HTTP::Client.new(opts)
       server  = servers.first
       retries = servers.count - 1
-      request = nil
+      req = nil
+
       begin
-        request = client.request(verb, "#{server}#{prefix}#{path}")
-        MultiJson.load(request.body)
+        req = client.request(verb, "#{server}#{prefix}#{path}")
+        response = MultiJson.load(req.body)
+        unless response['errorCode']
+          response
+        else
+          abort Error::CODES[response['errorCode']].new(response['message'])
+        end
       rescue IOError => e
         abort e if retries < 1
+
+        #sleep (@etcd_opts[:election_timeout] / 1000.0)
 
         old_server  = server
         new_servers = servers.dup
         new_servers.delete(old_server)
-        # Would be nice if you could get the host:port combination of the new leader via etcd.
-        # Or maybe i haven't looked good enough ^^
+        # Would be nice if you could get the host:port combination of the new leader directly.
         server = new_servers.sample
 
         servers.swap!(servers.index(old_server), servers.index(server))
 
         retries -= 1
 
-        #sleep (@etcd_opts[:election_timeout] / 1000.0)
         retry
+        # etcd is inconsistent in the way it handles http responses
+        # instead of adopting their buggy behaviour (all 5** errors are text, 4** errors are json,
+        # but both respond with text/plain content-type) i just use exceptions for flow control :<
       rescue MultiJson::LoadError => e
-        if request.code.between?(200, 299)
-          request.body.to_s
-        elsif request.code.between?(300, 399)
-          if request.headers['Location']
-            request(verb, request.headers['Location'], opts)
+        if req.code.between?(200, 299)
+          req.body.to_s
+        elsif req.code.between?(300, 399)
+          if req.headers['Location']
+            debug req.headers['Location']
+            request(verb, '', req.headers['Location'], opts)
           end
-        elsif request.code.between?(400, 499)
-          abort Error::HttpClientError.new("#{request.reason}\n#{request.body.to_s}")
-        elsif request.code.between?(500, 599)
-          abort Error::HttpServerError.new("#{request.reason}\n#{request.body.to_s}")
+        elsif req.code.between?(400, 499)
+          abort Error::HttpClientError.new("#{req.reason}\n\t#{req.body}")
+        elsif req.code.between?(500, 599)
+          abort Error::HttpServerError.new("#{req.reason}\n\t#{req.body}")
         else
           abort Error::EtzeteraError.new(e)
         end

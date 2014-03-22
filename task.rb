@@ -1,4 +1,4 @@
-$LOAD_PATH.unshift(File.expand_path('../lib', __FILE__)) unless $LOAD_PATH.include?(File.expand_path('../lib', __FILE__))
+require 'bundler/setup'
 require 'etzetera/version'
 require 'digest/sha2'
 
