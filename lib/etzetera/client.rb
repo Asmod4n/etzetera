@@ -128,13 +128,13 @@ module Etzetera
         opts = opts.with_form({:value => opts[:form]})
       end
 
-      client  = ::HTTP::Client.new(opts)
       server  = servers.first
       retries = servers.count - 1
       req = nil
 
       begin
-        req = client.request(verb, "#{server}#{prefix}#{path}")
+        client   = ::HTTP::Client.new(opts)
+        req      = client.request(verb, "#{server}#{prefix}#{path}")
         response = MultiJson.load(req.body)
         unless response['errorCode']
           response
