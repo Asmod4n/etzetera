@@ -161,16 +161,16 @@ module Etzetera
         # instead of adopting their buggy behaviour (all 5** errors are text, 4** errors are json,
         # but both respond with text/plain content-type) i just use exceptions for flow control :<
       rescue MultiJson::LoadError => e
-        if req.code.between?(200, 299)
-          req.body.to_s
-        elsif req.code.between?(300, 399)
+        case req.code
+        when 200..299 then req.body.to_s
+        when 300..399
           if req.headers['Location']
             debug req.headers['Location']
             request(verb, '', req.headers['Location'], opts)
           end
-        elsif req.code.between?(400, 499)
+        when 400..499
           abort Error::HttpClientError.new("#{req.reason}\n\t#{req.body}")
-        elsif req.code.between?(500, 599)
+        when 500..599
           abort Error::HttpServerError.new("#{req.reason}\n\t#{req.body}")
         else
           abort Error::EtzeteraError.new(e)
