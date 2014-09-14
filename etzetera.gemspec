@@ -3,7 +3,6 @@ require 'etzetera/version'
 
 Gem::Specification.new do |gem|
   gem.authors       = %w[Hendrik Beskow]
-  gem.email         = %w[hendrik@beskow.de]
   gem.description   = 'A etcd Client written in Ruby'
   gem.summary       = 'etcd ruby client'
   gem.homepage      = 'https://github.com/Asmod4n/etzetera'
